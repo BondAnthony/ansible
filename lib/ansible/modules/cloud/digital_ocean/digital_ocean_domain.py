@@ -48,7 +48,6 @@ notes:
 
 requirements:
   - "python >= 2.6"
-  - dopy
 '''
 
 
@@ -81,142 +80,79 @@ EXAMPLES = '''
 
 import os
 import traceback
-
-try:
-    from dopy.manager import DoError, DoManager
-    HAS_DOPY = True
-except ImportError as e:
-    HAS_DOPY = False
-
 from ansible.module_utils.basic import AnsibleModule
+from ansible.module_utils.digital_ocean import DigitalOceanHelper
 from ansible.module_utils._text import to_native
 
 
-class JsonfyMixIn(object):
+class DoManager(DigitalOceanHelper, object):
+    def __init__(self, module):
+        super(self.__class__, self).__init__(module)
+        self.domain_name = module.params.get('name', None)
+        self.domain_ip = module.params.get('ip', None)
+        self.domain_id = module.params.get('id', None)
 
-    def to_json(self):
-        return self.__dict__
+    def all_domains(self):
+        resp = self.get('domains/')
+        return resp['domains']
 
-
-class DomainRecord(JsonfyMixIn):
-    manager = None
-
-    def __init__(self, json):
-        self.__dict__.update(json)
-    update_attr = __init__
-
-    def update(self, data=None, record_type=None):
-        json = self.manager.edit_domain_record(self.domain_id,
-                                               self.id,
-                                               record_type if record_type is not None else self.record_type,
-                                               data if data is not None else self.data)
-        self.__dict__.update(json)
-        return self
-
-    def destroy(self):
-        json = self.manager.destroy_domain_record(self.domain_id, self.id)
-        return json
-
-
-class Domain(JsonfyMixIn):
-    manager = None
-
-    def __init__(self, domain_json):
-        self.__dict__.update(domain_json)
-
-    def destroy(self):
-        self.manager.destroy_domain(self.name)
-
-    def records(self):
-        json = self.manager.all_domain_records(self.name)
-        return map(DomainRecord, json)
-
-    @classmethod
-    def add(cls, name, ip):
-        json = cls.manager.new_domain(name, ip)
-        return cls(json)
-
-    @classmethod
-    def setup(cls, api_token):
-        cls.manager = DoManager(None, api_token, api_version=2)
-        DomainRecord.manager = cls.manager
-
-    @classmethod
-    def list_all(cls):
-        domains = cls.manager.all_domains()
-        return map(cls, domains)
-
-    @classmethod
-    def find(cls, name=None, id=None):
-        if name is None and id is None:
+    def find(self):
+        if self.domain_name is None or self.domain_id is None:
             return False
 
-        domains = Domain.list_all()
-
-        if id is not None:
-            for domain in domains:
-                if domain.id == id:
-                    return domain
-
-        if name is not None:
-            for domain in domains:
-                if domain.name == name:
-                    return domain
+        domains = self.all_domains()
+        for domain in domains:
+            if domain.id == self.domain_id:
+                return domain
+            elif domain.name == self.domain_name:
+                return domain
 
         return False
 
+    def add(self):
+        params = {'name': self.domain_name, 'ip_address': self.domain_ip}
+        resp = self.post('domains/', data=params)
+        return resp['domains']
+
+    def all_domain_records(self):
+        resp = self.get('domains/%s/records/' % self.domain_id)
+        return resp['domain_records']
+
+    def destroy_domain(self):
+        self.delete('domains/%s' % self.domain_id)
+        return True
+
+    def edit_domain_record(self):
+        params = {'name': self.domain_name}
+        resp = self.put('domains/%s/records/%s' % (self.domain_id, self.domain_ip), data=params)
+        return resp['domain_record']
+
 
 def core(module):
-    def getkeyordie(k):
-        v = module.params[k]
-        if v is None:
-            module.fail_json(msg='Unable to load %s' % k)
-        return v
+    do_manger = DoManager(module)
+    state = module.params.get('state')
 
-    try:
-        api_token = module.params['api_token'] or os.environ['DO_API_TOKEN'] or os.environ['DO_API_KEY']
-    except KeyError as e:
-        module.fail_json(msg='Unable to load %s' % e.message)
-
-    state = module.params['state']
-
-    Domain.setup(api_token)
-    if state in ('present'):
-        domain = Domain.find(id=module.params["id"])
-
+    domain = do_manger.find()
+    if state == 'present':
         if not domain:
-            domain = Domain.find(name=getkeyordie("name"))
-
-        if not domain:
-            domain = Domain.add(getkeyordie("name"),
-                                getkeyordie("ip"))
-            module.exit_json(changed=True, domain=domain.to_json())
+            domain = do_manger.add()
+            module.exit_json(changed=True, domain=domain)
         else:
-            records = domain.records()
+            records = do_manger.all_domain_records()
             at_record = None
             for record in records:
                 if record.name == "@" and record.type == 'A':
                     at_record = record
 
-            if not at_record.data == getkeyordie("ip"):
-                record.update(data=getkeyordie("ip"), record_type='A')
-                module.exit_json(changed=True, domain=Domain.find(id=record.id).to_json())
+            if not at_record.data == module.params.get('ip'):
+                do_manger.edit_domain_record()
+                module.exit_json(changed=True, domain=do_manger.find())
 
-        module.exit_json(changed=False, domain=domain.to_json())
-
-    elif state in ('absent'):
-        domain = None
-        if "id" in module.params:
-            domain = Domain.find(id=module.params["id"])
-
-        if not domain and "name" in module.params:
-            domain = Domain.find(name=module.params["name"])
-
+    elif state == 'absent':
         if not domain:
-            module.exit_json(changed=False, msg="Domain not found.")
-
-        event_json = domain.destroy()
-        module.exit_json(changed=True, event=event_json)
+            module.fail_json(changed=False, msg="Domain not found.")
+        delete_event = do_manger.destroy_domain()
+        module.exit_json(changed=delete_event)
 
 
 def main():
@@ -232,12 +168,10 @@ def main():
             ['id', 'name'],
         ),
     )
-    if not HAS_DOPY:
-        module.fail_json(msg='dopy required for this module')
 
     try:
         core(module)
-    except (DoError, Exception) as e:
+    except Exception as e:
         module.fail_json(msg=to_native(e), exception=traceback.format_exc())
 
 
