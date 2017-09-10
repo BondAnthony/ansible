@@ -87,7 +87,7 @@ optional arguments:
   --list                List all active Droplets as Ansible inventory
                         (default: True)
   --host HOST           Get all Ansible inventory variables about a specific
-                        Droplet
+                        Droplet by Droplet ID
   --all                 List all DigitalOcean information as JSON
   --droplets, -d        List Droplets as JSON
   --regions             List Regions as JSON
@@ -342,7 +342,7 @@ class DigitalOceanInventory(object):
         parser = argparse.ArgumentParser(description='Produce an Ansible Inventory file based on DigitalOcean credentials')
 
         parser.add_argument('--list', action='store_true', help='List all active Droplets as Ansible inventory (default: True)')
-        parser.add_argument('--host', action='store', help='Get all Ansible inventory variables about a specific Droplet')
+        parser.add_argument('--host', action='store', help='Get all Ansible inventory variables about a specific Droplet by Droplet ID')
 
         parser.add_argument('--all', action='store_true', help='List all DigitalOcean information as JSON')
         parser.add_argument('--droplets', '-d', action='store_true', help='List Droplets as JSON')
@@ -467,7 +467,11 @@ class DigitalOceanInventory(object):
 
     def load_droplet_variables_for_host(self):
         """ Generate a JSON response to a --host call """
-        host = int(self.args.host)
+        try:
+            host = int(self.args.host)
+        except ValueError:
+            sys.exit("Invalid host argument, value must be a numeric Droplet ID")
+
         droplet = self.manager.show_droplet(host)
         info = self.do_namespace(droplet)
         return {'droplet': info}
