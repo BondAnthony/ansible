@@ -169,7 +169,7 @@ def core(module):
 
     elif state == 'absent':
         if not domain:
-            module.fail_json(changed=False, msg="Domain not found.")
+            module.exit_json(changed=False, msg="Domain not found")
         delete_event = do_manager.destroy_domain()
         if not delete_event:
             module.fail_json(changed=False, msg=delete_event['message'])
